@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FaceMesh 3D — Interactive Portrait Animator</title>
+<meta name="description" content="Turn a portrait photo into an animated 3D face mesh. Runs entirely in your browser — nothing is uploaded.">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/OBJExporter.js" crossorigin="anonymous"></script>
+<script src="tri.js"></script>
+<style>
+:root{
+  --bg:#0b1020; --bg2:#141b33; --panel:rgba(22,30,56,.72);
+  --line:rgba(148,163,184,.18); --ink:#e8ecf8; --dim:#8e9ac0;
+  --indigo:#6366f1; --violet:#a855f7; --green:#10b981; --amber:#f59e0b; --red:#ef4444;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; min-height:100vh; color:var(--ink);
+  font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:radial-gradient(1200px 800px at 15% -10%,#1d2a55 0%,transparent 55%),
+             radial-gradient(1000px 700px at 105% 10%,#3a1f6b 0%,transparent 50%),
+             linear-gradient(160deg,var(--bg) 0%,var(--bg2) 100%);
+  background-attachment:fixed;
+  -webkit-font-smoothing:antialiased;
+}
+.glass{background:var(--panel);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);border:1px solid var(--line)}
+.grad-text{background:linear-gradient(100deg,#a5b4fc,#c084fc 60%,#f0abfc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:.75rem;padding:.7rem 1.15rem;font-weight:600;font-size:.875rem;border:1px solid transparent;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease;font-family:inherit}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn-primary{background:linear-gradient(100deg,var(--indigo),var(--violet));color:#fff;box-shadow:0 10px 30px -12px rgba(99,102,241,.85)}
+.btn-primary:hover{box-shadow:0 16px 38px -12px rgba(99,102,241,.95)}
+.btn-ghost{background:rgba(255,255,255,.06);color:var(--ink);border-color:var(--line)}
+.btn-ghost:hover{background:rgba(255,255,255,.12)}
+.btn[aria-pressed="true"]{background:linear-gradient(100deg,var(--indigo),var(--violet));border-color:transparent;color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
+
+/* drop zone */
+.drop{border:2px dashed rgba(99,102,241,.45);border-radius:1.25rem;transition:all .28s ease;cursor:pointer;background:rgba(17,24,44,.5)}
+.drop:hover,.drop:focus-visible{border-color:rgba(99,102,241,.95);background:rgba(99,102,241,.08);outline:none}
+.drop.over{border-color:var(--green);background:rgba(16,185,129,.1)}
+.drop.over .drop-ico{color:var(--green);transform:translateY(-4px) scale(1.06)}
+.drop-ico{transition:transform .28s ease,color .28s ease;color:#818cf8}
+
+/* stage */
+.stage{position:relative;border-radius:1rem;overflow:hidden;background:radial-gradient(circle at 50% 40%,#1b2544 0%,#0c1226 100%);border:1px solid var(--line);box-shadow:0 30px 70px -35px rgba(0,0,0,.9)}
+.stage canvas{display:block;width:100%!important;height:100%!important;touch-action:none}
+#landmarks{position:absolute;inset:0;pointer-events:none}
+.lm{position:absolute;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--green);opacity:.55;box-shadow:0 0 6px rgba(16,185,129,.9)}
+.hud{position:absolute;background:rgba(8,12,26,.62);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:.6rem;font-size:.72rem;color:#cbd5f5}
+.hud-bl{left:12px;bottom:12px;padding:.4rem;display:flex;gap:.35rem;flex-wrap:wrap}
+.hud-tr{right:12px;top:12px;padding:.35rem .7rem}
+
+/* sliders */
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:99px;background:rgba(255,255,255,.14);outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:17px;height:17px;border-radius:50%;background:linear-gradient(140deg,#818cf8,#c084fc);border:2px solid #0b1020;cursor:grab;box-shadow:0 0 0 1px rgba(129,140,248,.6),0 4px 12px rgba(0,0,0,.5)}
+input[type=range]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.12)}
+input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:linear-gradient(140deg,#818cf8,#c084fc);border:2px solid #0b1020;cursor:grab}
+input[type=range]:focus-visible{box-shadow:0 0 0 3px rgba(99,102,241,.35)}
+
+/* spinner */
+.spin{width:42px;height:42px;border:3px solid rgba(255,255,255,.1);border-top-color:var(--indigo);border-radius:50%;animation:spin 900ms linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.fade{animation:fade .45s ease both}
+@keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.hide{display:none!important}
+
+/* stat tiles */
+.tile{background:rgba(255,255,255,.045);border:1px solid var(--line);border-radius:.8rem;padding:.65rem .75rem}
+.chip{display:inline-flex;align-items:center;gap:.35rem;border-radius:999px;padding:.15rem .55rem;font-size:.68rem;font-weight:600}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+
+.note{font-size:.72rem;color:var(--dim);line-height:1.5}
+.divider{height:1px;background:var(--line)}
+a{color:#a5b4fc}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms!important;transition-duration:.001ms!important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body class="antialiased">
+
+<header class="sticky top-0 z-40 glass border-x-0 border-t-0">
+  <div class="max-w-7xl mx-auto px-5 py-3.5 flex items-center justify-between gap-4">
+    <div class="flex items-center gap-3 min-w-0">
+      <div class="w-10 h-10 flex-none rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 grid place-items-center font-extrabold text-lg shadow-lg shadow-indigo-900/40">3D</div>
+      <div class="min-w-0">
+        <h1 class="text-base sm:text-lg font-extrabold grad-text leading-tight">FaceMesh 3D</h1>
+        <p class="text-[11px] sm:text-xs text-slate-400 leading-tight">Interactive Portrait Animator</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 flex-none">
+      <span id="badge" class="chip border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"><span class="dot bg-emerald-400"></span>On-device</span>
+      <button id="resetBtn" class="btn btn-ghost hide" title="Load a different portrait">Reset</button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-5 py-7">
+
+  <!-- ══════════ STEP 1 : pick an image ══════════ -->
+  <section id="uploadSection">
+    <div id="dropZone" class="drop glass p-8 sm:p-12 text-center" tabindex="0" role="button"
+         aria-label="Upload a portrait photo. Drop a file here or press Enter to browse.">
+      <input type="file" id="fileInput" accept="image/*" class="hide">
+      <svg class="drop-ico w-14 h-14 sm:w-16 sm:h-16 mx-auto mb-4" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+      </svg>
+      <h2 class="text-xl sm:text-2xl font-extrabold mb-1.5">Upload a portrait photo</h2>
+      <p class="text-sm text-slate-400 mb-5">Drop an image here, or click to browse</p>
+      <span class="btn btn-primary pointer-events-none">Select image</span>
+      <p class="text-[11px] text-slate-500 mt-5">JPG or PNG · front-facing, well-lit portraits work best<br>
+        <span class="text-slate-400">Everything runs in this browser — your photo never leaves the device.</span></p>
+    </div>
+  </section>
+
+  <!-- ══════════ STEP 2 : working ══════════ -->
+  <section id="processingSection" class="hide text-center py-16">
+    <div class="spin mx-auto mb-5"></div>
+    <h3 class="text-lg font-bold mb-1.5" id="procTitle">Analysing facial features…</h3>
+    <p class="text-sm text-slate-400" id="procNote">Detecting landmarks and building the 3D mesh</p>
+    <div class="max-w-md mx-auto mt-6">
+      <div class="h-1.5 rounded-full bg-white/10 overflow-hidden">
+        <div id="procBar" class="h-full w-[12%] rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 transition-all duration-500"></div>
+      </div>
+      <p class="note mt-3" id="procStep">Fetching the Face Mesh model (~3.9 MB, cached after the first run)</p>
+    </div>
+    <button id="cancelBtn" class="btn btn-ghost mt-7">Cancel</button>
+  </section>
+
+  <!-- ══════════ STEP 3 : the app ══════════ -->
+  <section id="appSection" class="hide fade">
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+      <!-- viewport -->
+      <div class="lg:col-span-2 flex flex-col gap-3">
+        <div id="stage" class="stage" style="height:clamp(340px,62vh,620px)">
+          <div id="canvasHost"></div>
+          <div id="landmarks" aria-hidden="true"></div>
+
+          <div class="hud hud-bl">
+            <button id="tWire" class="btn !px-2.5 !py-1 !text-[11px]" aria-pressed="true">Wireframe</button>
+            <button id="tTex"  class="btn !px-2.5 !py-1 !text-[11px]" aria-pressed="true">Texture</button>
+            <button id="tLm"   class="btn !px-2.5 !py-1 !text-[11px]" aria-pressed="false">Points</button>
+          </div>
+          <div class="hud hud-tr">Drag to rotate · scroll to zoom</div>
+          <div id="glFail" class="hide absolute inset-0 grid place-items-center p-8 text-center bg-[#0c1226]/92">
+            <div>
+              <p class="font-bold text-red-300 mb-1.5">WebGL unavailable</p>
+              <p class="note max-w-xs">This browser or GPU could not start a WebGL context, so the 3D view cannot render. Enable hardware acceleration, or try another browser.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- feature analysis -->
+        <div class="glass rounded-2xl p-5">
+          <h3 class="font-bold mb-3.5">Facial feature analysis</h3>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="tile text-center">
+              <div class="w-10 h-10 mx-auto mb-1.5 rounded-full bg-indigo-500/15 grid place-items-center">
+                <svg class="w-5 h-5 text-indigo-300" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" d="M2.5 12C3.7 7.9 7.5 5 12 5s8.3 2.9 9.5 7c-1.2 4.1-5.1 7-9.5 7s-8.3-2.9-9.5-7z"/></svg>
+              </div>
+              <p class="text-[11px] text-slate-400">Eye tracking</p><p class="text-sm font-bold text-emerald-300">Active</p>
+            </div>
+            <div class="tile text-center">
+              <div class="w-10 h-10 mx-auto mb-1.5 rounded-full bg-purple-500/15 grid place-items-center">
+                <svg class="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.8 14.8a4 4 0 01-5.6 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </div>
+              <p class="text-[11px] text-slate-400">Mouth morph</p><p class="text-sm font-bold text-emerald-300">Detected</p>
+            </div>
+            <div class="tile text-center">
+              <div class="w-10 h-10 mx-auto mb-1.5 rounded-full bg-pink-500/15 grid place-items-center">
+                <svg class="w-5 h-5 text-puchsia-300" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+              </div>
+              <p class="text-[11px] text-slate-400">Head pose</p><p class="text-sm font-bold text-emerald-300">3D estimate</p>
+            </div>
+            <div class="tile text-center">
+              <div class="w-10 h-10 mx-auto mb-1.5 rounded-full bg-sky-500/15 grid place-items-center">
+                <svg class="w-5 h-5 text-sky-300" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </div>
+              <p class="text-[11px] text-slate-400">Mesh quality</p><p class="text-sm font-bold text-sky-300"><span id="triCount">854</span> tris</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- controls -->
+      <aside class="glass rounded-2xl p-5 flex flex-col gap-5 h-fit">
+        <div>
+          <h3 class="font-bold mb-1">Animation</h3>
+          <p class="note mb-3.5">Tune the mesh after it is built.</p>
+
+          <label class="block mb-3.5" for="rotY">
+            <span class="flex justify-between text-xs text-slate-400 mb-1.5"><span>Turn left / right</span><output id="rotYOut" class="font-mono text-indigo-300">0°</output></span>
+            <input type="range" id="rotY" min="-60" max="60" step="1" value="0">
+          </label>
+          <label class="block mb-3.5" for="rotX">
+            <span class="flex justify-between text-xs text-slate-400 mb-1.5"><span>Nod up / down</span><output id="rotXOut" class="font-mono text-indigo-300">0°</output></span>
+            <input type="range" id="rotX" min="-35" max="35" step="1" value="0">
+          </label>
+          <label class="block mb-3.5" for="depth">
+            <span class="flex justify-between text-xs text-slate-400 mb-1.5"><span>Relief depth</span><output id="depthOut" class="font-mono text-indigo-300">1.00×</output></span>
+            <input type="range" id="depth" min="0" max="3" step="0.05" value="1">
+          </label>
+          <label class="block" for="expr">
+            <span class="flex justify-between text-xs text-slate-400 mb-1.5"><span>Expression intensity</span><output id="exprOut" class="font-mono text-indigo-300">0.50</output></span>
+            <input type="range" id="expr" min="0" max="1" step="0.01" value="0.5">
+          </label>
+        </div>
+
+        <div class="divider"></div>
+
+        <div>
+          <h4 class="text-sm font-bold mb-2.5">Mode</h4>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="modeMouse" class="btn" aria-pressed="true">Drag / mouse</button>
+            <button id="modeAuto"  class="btn" aria-pressed="false">Auto idle</button>
+          </div>
+          <p class="note mt-2" id="modeHint">Move the pointer to turn the head.</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <div>
+          <h4 class="text-sm font-bold mb-2.5">Detected</h4>
+          <dl class="grid grid-cols-2 gap-2 text-xs">
+            <div class="tile"><dt class="text-slate-400">Landmarks</dt><dd id="lmCount" class="font-mono text-indigo-300 font-bold">—</dd></div>
+            <div class="tile"><dt class="text-slate-400">Triangles</dt><dd id="triCount2" class="font-mono text-emerald-300 font-bold">—</dd></div>
+            <div class="tile"><dt class="text-slate-400">Source</dt><dd class="text-emerald-300 font-bold">Image</dd></div>
+            <div class="tile"><dt class="text-slate-400">FPS</dt><dd id="fps" class="font-mono text-purple-300 font-bold">—</dd></div>
+          </dl>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="grid gap-2">
+          <button id="saveObj" class="btn btn-primary">Export .OBJ</button>
+          <button id="savePng" class="btn btn-ghost">Save snapshot</button>
+        </div>
+        <p class="note">The OBJ uses MediaPipe's real face topology — 854 triangles across 468 vertices. Open it in Blender, MeshLab or Maya.</p>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<footer class="max-w-7xl mx-auto px-5 pb-10 pt-2">
+  <p class="note text-center">Runs entirely on-device · MediaPipe Face Mesh + three.js · no uploads, no server, no API keys</p>
+</footer>
+
+<script>
+"use strict";
+(function () {
+
+const MP_VERSION = "0.4.1633559619";
+const MP_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@" + MP_VERSION + "/";
+const TRI = window.FACEMESH_TRIANGLES;
+
+const $ = (id) => document.getElementById(id);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const DEG = Math.PI / 180;
+
+const el = {
+  drop: $("dropZone"), file: $("fileInput"), up: $("uploadSection"),
+  proc: $("processingSection"), app: $("appSection"), reset: $("resetBtn"),
+  procBar: $("procBar"), procStep: $("procStep"), cancel: $("cancelBtn"),
+  host: $("canvasHost"), lm: $("landmarks"), glFail: $("glFail"),
+  lmCount: $("lmCount"), triCount: $("triCount"), triCount2: $("triCount2"), fps: $("fps"),
+};
+
+/* ── state ────────────────────────────────────────────────── */
+let scene, cam, renderer, mesh, wire, basePos = null, points = null;
+let raf = 0, runToken = 0, detector = null, landmarks = null, texture = null;
+let yawDeg = 0, pitchDeg = 0, depth = 1, expr = 0.5;
+let mode = "mouse", dragging = false, lastX = 0, lastY = 0;
+let spin = { x: 0, y: 0, rx: 0, ry: 0 };
+let objURL = null, imgURL = null, got = null;
+
+/* ── sanity: the tesselation table must exist ─────────────── */
+if (!TRI || TRI.length < 3 || TRI.length % 3 !== 0) {
+  document.body.innerHTML =
+    '<div style="padding:3rem;font-family:system-ui;color:#e8ecf8">' +
+    '<h1>Mesh table failed to load</h1>' +
+    '<p style="color:#8e9ac0">tri.js did not load or is malformed. Reload the page.</p></div>';
+  return;
+}
+
+/* ── three.js scene ───────────────────────────────────────── */
+function initThree() {
+  const w = el.host.clientWidth || 800, h = el.host.clientHeight || 500;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  } catch (e) { fail("WebGL could not start."); return; }
+  if (!renderer || !renderer.getContext()) { fail("WebGL could not start."); return; }
+
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.setSize(w, h, false);
+  el.host.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  cam = new THREE.PerspectiveCamera(42, w / h, 0.1, 100);
+  cam.position.set(0, 0, 3.05);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 0.95); key.position.set(2.4, 2.6, 3.2); scene.add(key);
+  const rim = new THREE.DirectionalLight(0x8b5cf6, 0.5); rim.position.set(-3, 0.5, -2); scene.add(rim);
+  const fill = new THREE.DirectionalLight(0x22d3ee, 0.28); fill.position.set(0, -2, 1.5); scene.add(fill);
+
+  el.glFail.classList.add("hide");
+  tick();
+}
+
+function fail(msg) {
+  el.glFail.classList.remove("hide");
+  el.glFail.querySelector("p.note").textContent = msg;
+}
+
+/* ── geometry: real MediaPipe topology ────────────────────── */
+function buildMesh(lms) {
+  const n = Math.min(lms.length, 468);
+  const pos = new Float32Array(n * 3);
+  const uv = new Float32Array(n * 2);
+
+  // centre on the nose tip (landmark 1) and normalise scale so any face fits
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) { cx += lms[i].x; cy += lms[i].y; }
+  cx /= n; cy /= n;
+
+  let span = 0;
+  for (let i = 0; i < n; i++) span = Math.max(span, Math.hypot(lms[i].x - cx, lms[i].y - cy));
+  const k = span > 1e-6 ? 1.55 / span : 1;
+
+  for (let i = 0; i < n; i++) {
+    const L = lms[i];
+    pos[i * 3]     = (L.x - cx) * k;
+    pos[i * 3 + 1] = -(L.y - cy) * k;      // image Y is down, three.js Y is up
+    pos[i * 3 + 2] = (L.z || 0) * k * depth;
+    uv[i * 2]     = L.x;
+    uv[i * 2 + 1] = 1 - L.y;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(TRI, 1));
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+
+  basePos = pos.slice();
+  return geo;
+}
+
+function dispose() {
+  [mesh, wire, points].forEach((o) => {
+    if (!o) return;
+    scene.remove(o);
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+      else o.material.dispose();
+    }
+  });
+  mesh = wire = points = null;
+}
+
+function render() {
+  dispose();
+
+  const geo = buildMesh(landmarks);
+  const solid = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    color: 0x818cf8, roughness: 0.42, metalness: 0.12,
+    side: THREE.DoubleSide, flatShading: false,
+  }));
+  mesh = scene.add(solid);
+
+  if (texture) {
+    const t = texture.clone();
+    t.needsUpdate = true;
+    mesh.material = new THREE.MeshStandardMaterial({
+      map: t, roughness: 0.5, metalness: 0.05,
+      side: THREE.DoubleSide, transparent: true, opacity: 0.94,
+    });
+  }
+
+  wire = scene.add(new THREE.LineSegments(
+    new THREE.WireframeGeometry(geo),
+    new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.28 })
+  ));
+
+  if ($("tLm").getAttribute("aria-pressed") === "true") {
+    points = scene.add(new THREE.Points(
+      geo,
+      new THREE.PointsMaterial({ color: 0xfbbf24, size: 0.016, sizeAttenuation: true })
+    ));
+  }
+
+  applyPose();
+  countPoints();
+}
+
+function applyPose() {
+  if (!mesh) return;
+  const p = mesh.geometry.attributes.position.array;
+  if (!basePos) return;
+  for (let i = 0; i < p.length; i++) p[i] = basePos[i];
+  mesh.geometry.attributes.position.needsUpdate = true;
+
+  // the index buffer must stay the 854-triangle tesselation — never rebuild it
+  if (wire) {
+    const w = wire.geometry.attributes.position;
+    if (w) w.needsUpdate = true;
+    wire.rotation.set(spin.rx, spin.ry, 0);
+  }
+  if (points) points.rotation.set(spin.rx, spin.ry, 0);
+}
+
+function countPoints() {
+  const box = el.host.getBoundingClientRect();
+  if (!box.width) return;
+  const v = new THREE.Vector3();
+  const frag = document.createDocumentFragment();
+  const step = landmarks.length > 200 ? 2 : 1;
+  for (let i = 0; i < landmarks.length; i += step) {
+    v.set(basePos[i * 3], basePos[i * 3 + 1], basePos[i * 3 + 2]);
+    mesh.localToWorld(v); v.project(cam);
+    if (v.z > 1) continue;
+    const d = document.createElement("i");
+    d.className = "lm";
+    d.style.left = ((v.x * 0.5 + 0.5) * 100) + "%";
+    d.style.top = ((-v.y * 0.5 + 0.5) * 100) + "%";
+    frag.appendChild(d);
+  }
+  el.lm.replaceChildren(frag);
+}
+
+/* ── MediaPipe ────────────────────────────────────────────── */
+async function detect() {
+  if (detector) return detector;
+  if (typeof FaceMesh === "undefined") {
+    throw new Error("Face Mesh library did not load. Check your connection and reload.");
+  }
+  detector = new FaceMesh({ locateFile: (f) => MP_BASE + f });
+  await detector.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: false,   // 478 pts; the 468-point tesselation is what we index
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+  let got2 = null;
+  detector.onResults((r) => { if (r.multiFaceLandmarks && r.multiFaceLandmarks[0]) got2 = r.multiFaceLandmarks[0]; });
+  detector.__got = () => got2;
+  return detector;
+}
+
+function step(pct, txt) {
+  el.procBar.style.width = pct + "%";
+  if (txt) el.procStep.textContent = txt;
+}
+
+/* ── file handling ────────────────────────────────────────── */
+function accept(file) {
+  if (!file || !/^image\//.test(file.type)) {
+    alert("That file is not an image. Please choose a JPG or PNG.");
+    return;
+  }
+  run();
+  const token = ++runToken;
+  el.up.classList.add("hide");
+  el.proc.classList.remove("hide");
+  el.reset.classList.add("hide");
+  step(10, "Reading your image…");
+
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  imgURL = url;
+
+  img.onload = async () => {
+    if (token !== runToken) return;
+    try {
+      step(25, "Fetching the Face Mesh model (~3.9 MB, cached after the first run)…");
+      const d = await detect();
+      if (token !== runToken) return;
+
+      step(55, "Detecting 468 facial landmarks…");
+      got = null;
+      await d.send({ image: img });
+      const found = d.__got();
+      if (!found) throw new Error("No face detected. Try a clearer, front-facing photo.");
+      if (token !== runToken) return;
+
+      landmarks = found;
+      step(80, "Building the 3D mesh…");
+      if (!renderer) initThree();
+      if (!renderer) throw new Error("3D view could not start.");
+
+      texture = new THREE.CanvasTexture(img);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+
+      render();
+      step(100, "Ready");
+      el.lmCount.textContent = landmarks.length;
+      el.triCount.textContent = (TRI.length / 3).toLocaleString();
+      el.triCount2.textContent = (TRI.length / 3).toLocaleString();
+
+      setTimeout(() => {
+        if (token !== runToken) return;
+        el.proc.classList.add("hide");
+        el.app.classList.remove("hide");
+        el.reset.classList.remove("hide");
+        resize();
+      }, 260);
+    } catch (e) {
+      if (token !== runToken) return;
+      console.error(e);
+      el.proc.classList.add("hide");
+      el.up.classList.remove("hide");
+      step(0, e && e.message ? e.message : "Something went wrong.");
+      el.procStep.textContent = "That did not work — pick another image.";
+      el.file.value = "";
+      alert("Could not build the mesh.\n\n" + (e && e.message ? e.message : String(e)));
+    }
+  };
+
+  img.onerror = () => {
+    if (token !== runToken) return;
+    el.proc.classList.add("hide");
+    el.up.classList.remove("hide");
+    el.file.value = "";
+    alert("That image could not be decoded by your browser.");
+  };
+
+  img.src = url;
+}
+
+function run() {
+  if (raf) { cancelAnimationFrame(raf); raf = 0; }
+}
+
+/* ── animation ────────────────────────────────────────────── */
+function tick() {
+  raf = requestAnimationFrame(tick);
+
+  if (mode === "auto") {
+    const t = performance.now() / 1000;
+    spin.ry = Math.sin(t * 0.55) * 0.42;
+    spin.rx = Math.sin(t * 0.37) * 0.14;
+  } else if (!dragging) {
+    spin.rx += (pitchDeg * DEG - spin.rx) * 0.12;
+    spin.ry += (yawDeg * DEG - spin.ry) * 0.12;
+  }
+
+  if (mesh) {
+    mesh.rotation.set(spin.rx, spin.ry, 0);
+    if (wire) wire.rotation.set(spin.rx, spin.ry, 0);
+    if (points) points.rotation.set(spin.rx, spin.ry, 0);
+    if (expr > 0 && basePos) breathe(expr);
+  }
+  if (renderer && scene && cam) renderer.render(scene, cam);
+}
+
+function breathe(a) {
+  const p = mesh.geometry.attributes.position.array;
+  const t = performance.now() / 1000;
+  for (let i = 0; i < p.length; i += 3) {
+    const x = basePos[i], y = basePos[i + 1], z = basePos[i + 2];
+    const n = Math.sin(x * 4.2 + t * 1.5) * Math.cos(y * 3.6 - t) * 0.016 * a;
+    p[i]     = x + n;
+    p[i + 1] = y + n * 0.55;
+    p[i + 2] = z + n * 0.35;
+  }
+  mesh.geometry.attributes.position.needsUpdate = true;
+}
+
+/* ── fps ──────────────────────────────────────────────────── */
+let fLast = performance.now(), fN = 0;
+(function fps() {
+  requestAnimationFrame(fps);
+  const now = performance.now();
+  fN++;
+  if (now - fLast >= 1000) {
+    if (el.app && !el.app.classList.contains("hide")) el.fps.textContent = fN;
+    fN = 0; fLast = now;
+  }
+})();
+
+/* ── resize ───────────────────────────────────────────────── */
+let rTimer = 0;
+function resize() {
+  clearTimeout(rTimer);
+  rTimer = setTimeout(() => {
+    const w = el.host.clientWidth, h = el.host.clientHeight;
+    if (!w || !h || !renderer) return;
+    cam.aspect = w / h;
+    cam.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+    countPoints();
+  }, 80);
+}
+addEventListener("resize", resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(el.host);
+
+/* ── drag to rotate ───────────────────────────────────────── */
+el.host.addEventListener("pointerdown", (e) => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  el.host.setPointerCapture(e.pointerId);
+});
+el.host.addEventListener("pointermove", (e) => {
+  if (!dragging) {
+    if (mode === "mouse") {
+      yawDeg = clamp(((e.clientX / innerWidth) * 2 - 1) * 42, -60, 60);
+      pitchDeg = clamp(-(((e.clientY / innerHeight) * 2 - 1) * 22), -35, 35);
+      syncSliders();
+    }
+    return;
+  }
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  spin.ry = clamp(spin.ry + dx * 0.008, -1.6, 1.6);
+  spin.rx = clamp(spin.rx - dy * 0.006, -0.9, 0.9);
+  yawDeg = spin.ry / DEG; pitchDeg = spin.rx / DEG;
+  syncSliders();
+});
+const stop = (e) => { dragging = false; try { el.host.releasePointerCapture(e.pointerId); } catch (_) {} };
+el.host.addEventListener("pointerup", stop);
+el.host.addEventListener("pointercancel", stop);
+el.host.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  cam.position.z = clamp(cam.position.z + e.deltaY * 0.0022, 1.4, 8);
+}, { passive: false });
+
+/* ── sliders ──────────────────────────────────────────────── */
+function bindSlider(id, fn, fmt) {
+  const s = $(id), out = $(id + "Out");
+  const run2 = () => { const v = parseFloat(s.value); fn(v); if (out) out.textContent = fmt(v); };
+  s.addEventListener("input", run2);
+  run2();
+}
+bindSlider("rotY", (v) => { yawDeg = v; }, (v) => Math.round(v) + "°");
+bindSlider("rotX", (v) => { pitchDeg = v; }, (v) => Math.round(v) + "°");
+bindSlider("depth", (v) => { depth = v; if (landmarks) render(); }, (v) => v.toFixed(2) + "×");
+bindSlider("expr", (v) => { expr = v; }, (v) => v.toFixed(2));
+
+function syncSliders() {
+  $("rotY").value = Math.round(yawDeg); $("rotYOut").textContent = Math.round(yawDeg) + "°";
+  $("rotX").value = Math.round(pitchDeg); $("rotXOut").textContent = Math.round(pitchDeg) + "°";
+}
+
+/* ── toggles ──────────────────────────────────────────────── */
+function toggle(btn, on) {
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+}
+$("tWire").addEventListener("click", (e) => {
+  const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  toggle(e.currentTarget, on);
+  if (wire) wire.visible = on;
+});
+$("tTex").addEventListener("click", (e) => {
+  const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  toggle(e.currentTarget, on);
+  if (mesh) mesh.material.opacity = on ? 0.94 : 1;
+  if (mesh && texture) mesh.material.transparent = !on;
+});
+$("tLm").addEventListener("click", () => {
+  const on = $("tLm").getAttribute("aria-pressed") !== "true";
+  toggle($("tLm"), on);
+  el.lm.classList.toggle("hide", !on);
+  if (on && mesh) countPoints(); else el.lm.replaceChildren();
+});
+
+/* ── mode ─────────────────────────────────────────────────── */
+function setMode(m) {
+  mode = m;
+  toggle($("modeMouse"), m === "mouse");
+  toggle($("modeAuto"), m === "auto");
+  $("modeHint").textContent = m === "auto"
+    ? "Head sways on its own."
+    : "Move the pointer, or drag the mesh.";
+}
+$("modeMouse").addEventListener("click", () => setMode("mouse"));
+$("modeAuto").addEventListener("click", () => setMode("auto"));
+
+/* ── export ───────────────────────────────────────────────── */
+$("saveObj").addEventListener("click", () => {
+  if (!mesh) return;
+  try {
+    let obj = "";
+    if (typeof THREE.OBJExporter === "function") {
+      obj = new THREE.OBJExporter().parse(mesh);
+    } else {
+      // fall back to a hand-rolled writer if the CDN exporter is unavailable
+      const p = mesh.geometry.attributes.position.array;
+      const u = mesh.geometry.attributes.uv ? mesh.geometry.attributes.uv.array : null;
+      const idx = mesh.geometry.index.array;
+      for (let i = 0; i < p.length; i += 3) obj += `v ${p[i].toFixed(6)} ${p[i + 1].toFixed(6)} ${p[i + 2].toFixed(6)}\n`;
+      for (let i = 0; i < idx.length; i += 3) obj += `f ${idx[i] + 1} ${idx[i + 1] + 1} ${idx[i + 2] + 1}\n`;
+      void u;
+    }
+    const blob = new Blob([obj], { type: "text/plain" });
+    if (objURL) URL.revokeObjectURL(objURL);
+    objURL = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objURL; a.download = "facemesh-3d.obj";
+    a.click();
+  } catch (err) {
+    alert("Export failed: " + (err && err.message ? err.message : String(err)));
+  }
+});
+
+$("savePng").addEventListener("click", () => {
+  if (!renderer) return;
+  // repaint so the buffer is current, then read it
+  tick();
+  renderer.render(scene, cam);
+  const a = document.createElement("a");
+  a.href = renderer.domElement.toDataURL("image/png");
+  a.download = "facemesh-3d.png";
+  a.click();
+});
+
+/* ── drop zone ────────────────────────────────────────────── */
+el.drop.addEventListener("click", () => el.file.click());
+el.drop.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.file.click(); }
+});
+el.file.addEventListener("change", (e) => { if (e.target.files[0]) accept(e.target.files[0]); });
+["dragenter", "dragover"].forEach((ev) => el.drop.addEventListener(ev, (e) => {
+  e.preventDefault(); el.drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach((ev) => el.drop.addEventListener(ev, (e) => {
+  e.preventDefault();
+  if (ev === "dragleave" && el.drop.contains(e.relatedTarget)) return;
+  el.drop.classList.remove("over");
+}));
+el.drop.addEventListener("drop", (e) => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) accept(f);
+});
+
+el.cancel.addEventListener("click", () => {
+  runToken++;
+  run();
+  el.proc.classList.add("hide");
+  el.up.classList.remove("hide");
+  el.file.value = "";
+  step(10, "Cancelled.");
+});
+
+el.reset.addEventListener("click", () => {
+  runToken++;
+  if (raf) cancelAnimationFrame(raf);
+  landmarks = null; basePos = null;
+  el.lm.replaceChildren();
+  el.app.classList.add("hide");
+  el.reset.classList.add("hide");
+  el.proc.classList.add("hide");
+  el.up.classList.remove("hide");
+  el.file.value = "";
+  if (imgURL) { URL.revokeObjectURL(imgURL); imgURL = null; }
+  if (!renderer) return;
+  initThree();          // keeps the (empty) stage alive behind the uploader
+  step(10, "Pick another image.");
+});
+
+/* ── go ───────────────────────────────────────────────────── */
+addEventListener("DOMContentLoaded", () => {
+  if (!window.THREE) {
+    step(10, "three.js did not load — check your connection and reload.");
+    return;
+  }
+  // warm the 3D layer early so the first render is instant
+  initThree();
+  setMode("mouse");
+  setTimeout(() => { if (el.up && !el.up.classList.contains("hide")) { /* ready */ } }, 0);
+});
+
+})();
+</script>
+</body>
+</html>
