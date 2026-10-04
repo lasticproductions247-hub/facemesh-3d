@@ -373,11 +373,15 @@ function render() {
   dispose();
 
   const geo = buildMesh(landmarks);
+  // NOTE: Object3D.add() returns the PARENT, not the child. Never write
+  // `mesh = scene.add(x)` — that rebinds mesh to the scene, and every later
+  // `mesh.geometry` is then undefined (the crash this comment exists for).
   const solid = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
     color: 0x818cf8, roughness: 0.42, metalness: 0.12,
     side: THREE.DoubleSide, flatShading: false,
   }));
-  mesh = scene.add(solid);
+  scene.add(solid);
+  mesh = solid;
 
   if (texture) {
     const t = texture.clone();
@@ -388,16 +392,17 @@ function render() {
     });
   }
 
-  wire = scene.add(new THREE.LineSegments(
-    new THREE.WireframeGeometry(geo),
-    new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.28 })
-  ));
+  const wireGeo = new THREE.WireframeGeometry(geo);
+  wire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
+    color: 0x10b981, transparent: true, opacity: 0.28
+  }));
+  scene.add(wire);
 
   if ($("tLm").getAttribute("aria-pressed") === "true") {
-    points = scene.add(new THREE.Points(
-      geo,
-      new THREE.PointsMaterial({ color: 0xfbbf24, size: 0.016, sizeAttenuation: true })
-    ));
+    points = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: 0xfbbf24, size: 0.016, sizeAttenuation: true
+    }));
+    scene.add(points);
   }
 
   applyPose();
